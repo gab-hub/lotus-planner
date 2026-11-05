@@ -30,7 +30,8 @@ try {
 }
 const S = { ...c.DEFAULTS, ...saved };
 const FILE = path.join(VAULT, S.file);
-const CLAUDE = process.env.LOTUS_CLAUDE || S.claudePath;
+// data.json copied from another Mac may carry that Mac's home path; fall back to this user's default.
+const CLAUDE = process.env.LOTUS_CLAUDE || (fs.existsSync(S.claudePath) ? S.claudePath : c.DEFAULTS.claudePath);
 const force = process.argv.includes('--force');
 const dry = process.argv.includes('--dry-run');
 
