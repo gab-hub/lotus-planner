@@ -1,0 +1,9 @@
+{
+  "id": "lotus-planner",
+  "name": "Lotus Planner",
+  "version": "0.2.0",
+  "minAppVersion": "1.4.0",
+  "description": "Daily dashboard: calendar, a self-resetting routine, and tasks popped from a priority stack by Claude within an effort budget.",
+  "author": "gabbie",
+  "isDesktopOnly": true
+}

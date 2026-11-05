@@ -1,0 +1,33 @@
+#!/bin/bash
+# Entry point for the launchd jobs.
+#   lotus-run calendar  -> refresh the calendar cache + git sync (both Macs, every 30 min)
+#   lotus-run sync      -> git sync only (laptop, 7:50pm, so the mini sees today before it plans)
+#   lotus-run reset     -> laptop: open Obsidian in the background so the plugin pulls + resets Daily
+#   lotus-run show      -> laptop: bring Obsidian forward on the Lotus dashboard
+#   lotus-run plan      -> Mac mini: headless rollover + plan tomorrow, then push
+set -u
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# config.sh (written by install.sh, not in git): LOTUS_VAULT=/path/to/vault
+[ -f "$DIR/config.sh" ] && . "$DIR/config.sh"
+: "${LOTUS_VAULT:?set LOTUS_VAULT in $DIR/config.sh}"
+export LOTUS_VAULT
+VAULT_DIR="$LOTUS_VAULT"
+VAULT_NAME="$(basename "$LOTUS_VAULT")"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+mkdir -p "$DIR/cache"
+
+calendar() {
+  if "$DIR/bin/lotus-cal" 0 3 > "$DIR/cache/events.jsonl.tmp" 2> "$DIR/cache/calendar.err"; then
+    mv "$DIR/cache/events.jsonl.tmp" "$DIR/cache/events.jsonl"
+  fi
+}
+sync() { /bin/bash "$DIR/bin/lotus-sync" "$VAULT_DIR" >> "$DIR/cache/sync.log" 2>&1; }
+
+case "${1:-}" in
+  calendar) calendar; sync ;;
+  sync)     sync ;;
+  reset)    calendar; /usr/bin/open -g "obsidian://lotus-planner?vault=$VAULT_NAME&action=reset" ;;
+  show)     calendar; /usr/bin/open    "obsidian://lotus-planner?vault=$VAULT_NAME&action=show" ;;
+  plan)     calendar; node "$DIR/bin/lotus-plan.js" >> "$DIR/cache/plan.log" 2>&1 ;;
+  *) echo "usage: lotus-run calendar|sync|reset|show|plan" >&2; exit 2 ;;
+esac

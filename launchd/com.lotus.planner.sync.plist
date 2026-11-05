@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.lotus.planner.sync</string>
+  <!-- Laptop: push today's state at 7:50pm so the Mac mini plans tomorrow from it at 8pm. -->
+  <key>ProgramArguments</key><array><string>__DIR__/bin/lotus-run</string><string>sync</string></array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>50</integer></dict>
+</dict></plist>

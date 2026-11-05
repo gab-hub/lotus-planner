@@ -1,0 +1,31 @@
+#!/bin/bash
+# lotus-sync <vault>: commit local edits, pull --rebase from the remote, push.
+# Used by the laptop plugin, the launchd jobs, the Mac mini planner and the add-task skill.
+# No upstream configured yet -> just commits.
+set -u
+VAULT="${1:-${LOTUS_VAULT:?usage: lotus-sync <vault>}}"
+cd "$VAULT" || exit 1
+GIT=/usr/bin/git
+LOCK="$VAULT/.git/lotus-sync.lock"
+
+notify() { /usr/bin/osascript -e "display notification \"$1\" with title \"Lotus sync\"" >/dev/null 2>&1 || true; echo "$1" >&2; }
+
+# One sync at a time (plugin and launchd can overlap). Stale lock after 2 min is ignored.
+for _ in $(seq 1 20); do
+  mkdir "$LOCK" 2>/dev/null && break
+  if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +2 2>/dev/null)" ]; then rmdir "$LOCK"; continue; fi
+  /bin/sleep 1
+done
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+
+$GIT add -A
+$GIT diff --cached --quiet || $GIT commit -qm "Edits on $(/bin/hostname -s)"
+
+$GIT rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1 || exit 0
+
+if ! $GIT pull -q --rebase --autostash; then
+  $GIT rebase --abort 2>/dev/null
+  notify "Couldn't merge with the other Mac. Nothing was lost; open the vault and run git status."
+  exit 1
+fi
+$GIT push -q || { notify "Push failed (offline?). Will retry next sync."; exit 1; }
