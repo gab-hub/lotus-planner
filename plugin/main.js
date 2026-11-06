@@ -210,6 +210,13 @@ function bodyRange(lines, idx) {
 function resetDaily(lines) {
   const d = findHeading(lines, 'Daily', 1);
   if (d < 0) return 0;
+  // A finished "(one-off)" item is removed (with its sub-items) instead of reset.
+  for (let i = sectionEnd(lines, d) - 1; i > d; i--) {
+    if (!/^- \[[xX]\] .*\(one-off\)\s*$/.test(lines[i])) continue;
+    let j = i + 1;
+    while (j < lines.length && /^\t/.test(lines[j])) j++;
+    lines.splice(i, j - i);
+  }
   const end = sectionEnd(lines, d);
   let n = 0;
   for (let i = d + 1; i < end; i++) {
