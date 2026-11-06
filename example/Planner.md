@@ -1,6 +1,10 @@
 # Daily
+## Morning
 - [ ] Morning routine
 	- Notes under an item are kept; only the checkboxes reset each morning.
+## Afternoon
+- [ ] Steps
+## Evening
 - [ ] Workout
 - [ ] Inbox zero (once, after work)
 - [ ] Today's frontlog ↓

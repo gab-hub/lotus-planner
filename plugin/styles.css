@@ -126,3 +126,11 @@
 /* ---- footer */
 .lotus-foot { display: flex; justify-content: space-between; margin-top: 20px; font-size: 0.82em; color: var(--text-faint); }
 .lotus-foot a { cursor: pointer; }
+
+/* Daily sub-sections (## Morning / ## Afternoon / ## Evening) */
+.lotus-group { display: flex; justify-content: space-between; align-items: baseline; margin: 12px 0 2px;
+  font-size: var(--font-ui-smaller); font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-muted); }
+.lotus-group:first-of-type { margin-top: 2px; }
+.lotus-group-count { font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-faint); }
+.lotus-group.is-now, .lotus-group.is-now .lotus-group-count { color: var(--lotus-accent); }

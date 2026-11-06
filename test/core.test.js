@@ -8,6 +8,28 @@ Module._load = function (req, ...rest) {
 const assert = require('assert');
 const c = require('../plugin/main.js').core;
 
+// Daily sub-sections
+{
+  const L = `# Daily
+- [ ] Loose
+## Morning
+- [x] Stretch
+	- note
+## Evening
+- [ ] Workout
+- [ ] Shutdown
+# Frontlog
+## Next
+- [ ] x`.split('\n');
+  const g = c.dailyGroups(L);
+  assert.deepEqual(g.map((x) => [x.title, x.items.map((i) => i.text)]), [[null, ['Loose']], ['Morning', ['Stretch']], ['Evening', ['Workout', 'Shutdown']]]);
+  assert.equal(c.dailyItems(L).length, 4, 'sub-headings stay inside # Daily');
+  assert.equal(c.resetDaily(L), 1);
+  assert.equal(c.currentPart(new Date(2026, 10, 6, 9)), 'morning');
+  assert.equal(c.currentPart(new Date(2026, 10, 6, 13)), 'afternoon');
+  assert.equal(c.currentPart(new Date(2026, 10, 6, 18)), 'evening');
+}
+
 const doc = `# Daily
 - [x] Morning: stretch
 	- note stays

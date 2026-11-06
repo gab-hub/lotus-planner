@@ -321,6 +321,33 @@ function dayItems(lines, date) {
 
 const dailyItems = (lines) => topItems(lines, findHeading(lines, 'Daily', 1));
 
+/** Daily items grouped by optional "## Morning"-style sub-headings: [{title, items}]; title null before the first. */
+function dailyGroups(lines) {
+  const groups = [];
+  let cur = null;
+  const add = (title) => groups.push((cur = { title, items: [] }));
+  const d = findHeading(lines, 'Daily', 1);
+  if (d < 0) return groups;
+  for (const it of dailyItems(lines)) {
+    let title = null;
+    for (let i = it.line - 1; i > d; i--) {
+      if (headingLevel(lines[i])) {
+        title = lines[i].replace(/^#+ /, '').trim();
+        break;
+      }
+    }
+    if (!cur || cur.title !== title) add(title);
+    cur.items.push(it);
+  }
+  return groups;
+}
+
+/** Which Daily group is "now" by its name: Morning before noon, Afternoon until eveningHour, Evening after. */
+function currentPart(date, eveningHour = 17) {
+  const h = date.getHours();
+  return h < 12 ? 'morning' : h < eveningHour ? 'afternoon' : 'evening';
+}
+
 // ---------------------------------------------------------------- routine sustainability
 
 /** Snapshot of the Daily checklist for one day, taken right before the reset wipes it. */
@@ -833,11 +860,21 @@ class Dashboard extends ItemView {
     const dcard = this.card(colB, 'Daily routine', 'repeat', `${dailyDone}/${daily.length}`);
     const hasHistory = Object.keys(history || {}).length > 0;
     if (dailyDone === daily.length && daily.length) dcard.createDiv({ cls: 'lotus-empty', text: 'All done today 🌸' });
-    // Open items first, then finished ones (faded).
-    for (const it of [...daily.filter((d) => !d.checked), ...daily.filter((d) => d.checked)]) {
-      const w = workouts[now.getDay()];
-      const label = hasWorkouts && /^Workout/.test(it.text) ? (w === 'Rest' ? 'Rest day (PT optional)' : `Workout: ${w} + PT`) : it.text;
-      this.checkRow(dcard, it, { label, trail: hasHistory ? itemTrail(history, it.text, today) : null });
+    // Grouped by "## Morning"-style sub-headings if the note has them; open items first in each group.
+    const part = currentPart(now, p.settings.eveningHour);
+    for (const g of dailyGroups(lines)) {
+      if (g.title) {
+        const done = g.items.filter((d) => d.checked).length;
+        const isNow = g.title.toLowerCase().startsWith(part);
+        const h = dcard.createDiv({ cls: 'lotus-group' + (isNow ? ' is-now' : '') });
+        h.createSpan({ text: g.title });
+        h.createSpan({ cls: 'lotus-group-count', text: isNow ? `now · ${done}/${g.items.length}` : `${done}/${g.items.length}` });
+      }
+      for (const it of [...g.items.filter((d) => !d.checked), ...g.items.filter((d) => d.checked)]) {
+        const w = workouts[now.getDay()];
+        const label = hasWorkouts && /^Workout/.test(it.text) ? (w === 'Rest' ? 'Rest day (PT optional)' : `Workout: ${w} + PT`) : it.text;
+        this.checkRow(dcard, it, { label, trail: hasHistory ? itemTrail(history, it.text, today) : null });
+      }
     }
     if (hasHistory) dcard.createDiv({ cls: 'lotus-legend', text: 'Dots: last 7 days, oldest → newest' });
 
@@ -1009,7 +1046,7 @@ class LotusSettings extends PluginSettingTab {
 module.exports = LotusPlanner;
 module.exports.core = {
   dayKey, dateLabel, labelToDate, addDays, parseTree, serialize, resetDaily, rollover, nextQueue,
-  queueOutline, applyPicks, dayItems, dailyItems, ensureDateSection, buildPrompt, parseClaudeReply,
+  queueOutline, applyPicks, dayItems, dailyItems, dailyGroups, currentPart, ensureDateSection, buildPrompt, parseClaudeReply,
   loadEvents, eventsOn, dailySnapshot, routineHealth, itemTrail, askClaude, readShared, writeShared,
   choosePicks, commitPicks, startOfDay, budgetFor, DEFAULTS,
 };

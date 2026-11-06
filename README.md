@@ -4,7 +4,8 @@ An Obsidian plugin (macOS) that turns one markdown note into a calm daily dashbo
 
 - **Today / Tonight:** what's left on your calendar (read from macOS Calendar, so Google/iCloud/Exchange all work).
 - **Daily routine:** a checklist that resets itself every morning, with 7-day dots per item and a gentle nudge
-  when the routine keeps going unfinished (a sign it's too big).
+  when the routine keeps going unfinished (a sign it's too big). Optional `## Morning` / `## Afternoon` /
+  `## Evening` sub-headings group it, and the dashboard highlights the part of the day you're in.
 - **Frontlog:** each day gets a few tasks popped from the top of your `## Next` stack. You prioritize the stack;
   Claude only decides *how many* fit, using an effort budget (light on weeknights, more on weekends, less on
   evenings you have plans). Projects are split: their first open sub-item gets assigned as `Project › step`.
@@ -21,7 +22,9 @@ One file in your vault (default `Planner.md`; see [example/Planner.md](example/P
 
 ```markdown
 # Daily
+## Morning                      ← optional sub-sections
 - [ ] Morning routine
+## Evening
 - [ ] Today's frontlog ↓        ← ticks itself when today's tasks are all done
 # Frontlog
 ## Nov 5                        ← one section per day; unfinished tasks roll forward
