@@ -134,3 +134,5 @@
 .lotus-group:first-of-type { margin-top: 2px; }
 .lotus-group-count { font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--text-faint); }
 .lotus-group.is-now, .lotus-group.is-now .lotus-group-count { color: var(--lotus-accent); }
+.lotus-event.is-past { opacity: 0.45; }
+.lotus-card .lotus-events { margin: 2px 0 4px; }

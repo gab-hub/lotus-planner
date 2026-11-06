@@ -26,7 +26,14 @@ const c = require('../plugin/main.js').core;
   assert.equal(c.dailyItems(L).length, 4, 'sub-headings stay inside # Daily');
   assert.equal(c.resetDaily(L), 1);
   assert.equal(c.currentPart(new Date(2026, 10, 6, 9)), 'morning');
-  assert.equal(c.currentPart(new Date(2026, 10, 6, 13)), 'afternoon');
+  assert.equal(c.currentPart(new Date(2026, 10, 6, 13)), 'day');
+  const ev = (h, title, allDay = false) => ({ title, allDay, start: new Date(2026, 10, 6, h), end: new Date(2026, 10, 6, h + 1) });
+  const tl = c.dayTimeline(g, [ev(18, 'Luke'), ev(0, 'Holiday', true), ev(16, 'TJs'), ev(17, 'Lex')]);
+  assert.deepEqual(tl.map((b) => [b.part, b.items.map((i) => i.text), b.events.map((e) => e.title)]), [
+    ['morning', ['Stretch'], ['Holiday']],
+    ['day', ['Loose'], ['TJs']],
+    ['evening', ['Workout', 'Shutdown'], ['Lex', 'Luke']],
+  ]);
   assert.equal(c.currentPart(new Date(2026, 10, 6, 18)), 'evening');
 }
 

@@ -342,10 +342,33 @@ function dailyGroups(lines) {
   return groups;
 }
 
+/**
+ * Today as one timeline: Daily routine groups merged with calendar events into three blocks.
+ *   morning: "## Morning" routine items (+ all-day events), before anything else
+ *   day:     "## Afternoon" (or unsectioned) items, then events starting before eveningHour
+ *   evening: events from eveningHour on, then "## Evening" items
+ * Returns [{part, title, items, events}] for blocks that have something in them.
+ */
+function dayTimeline(groups, events, eveningHour = 17) {
+  const blocks = {
+    morning: { part: 'morning', title: 'Morning', items: [], events: [] },
+    day: { part: 'day', title: 'Daytime', items: [], events: [] },
+    evening: { part: 'evening', title: 'Evening', items: [], events: [] },
+  };
+  const partOf = (title) =>
+    /^morn/i.test(title || '') ? 'morning' : /^(even|night|tonight)/i.test(title || '') ? 'evening' : 'day';
+  for (const g of groups) blocks[partOf(g.title)].items.push(...g.items);
+  for (const e of [...events].sort((a, b) => a.start - b.start)) {
+    const b = e.allDay ? 'morning' : e.start.getHours() >= eveningHour ? 'evening' : 'day';
+    blocks[b].events.push(e);
+  }
+  return Object.values(blocks).filter((b) => b.items.length || b.events.length);
+}
+
 /** Which Daily group is "now" by its name: Morning before noon, Afternoon until eveningHour, Evening after. */
 function currentPart(date, eveningHour = 17) {
   const h = date.getHours();
-  return h < 12 ? 'morning' : h < eveningHour ? 'afternoon' : 'evening';
+  return h < 12 ? 'morning' : h < eveningHour ? 'day' : 'evening';
 }
 
 // ---------------------------------------------------------------- routine sustainability
@@ -844,39 +867,39 @@ class Dashboard extends ItemView {
     const colA = grid.createDiv({ cls: 'lotus-col' });
     const colB = grid.createDiv({ cls: 'lotus-col' });
 
-    // ---- today / tonight
-    const ev = this.card(colA, evening ? 'Tonight' : 'Today', 'calendar-clock');
-    this.eventList(ev, leftToday, 'Nothing else on the calendar today.');
+    // ---- today: routine + calendar as one timeline
+    const hasHistory = Object.keys(history || {}).length > 0;
+    const dcard = this.card(colA, 'Today', 'calendar-clock', `${dailyDone}/${daily.length}`);
+    const part = currentPart(now, p.settings.eveningHour);
+    const blocks = dayTimeline(dailyGroups(lines), eventsOn(events, today), p.settings.eveningHour);
+    if (!blocks.length) dcard.createDiv({ cls: 'lotus-empty', text: 'Nothing on today.' });
+    for (const b of blocks) {
+      const isNow = b.part === part;
+      const done = b.items.filter((d) => d.checked).length;
+      const h = dcard.createDiv({ cls: 'lotus-group' + (isNow ? ' is-now' : '') });
+      h.createSpan({ text: b.title });
+      const bits = [isNow ? 'now' : '', b.items.length ? `${done}/${b.items.length}` : ''].filter(Boolean);
+      h.createSpan({ cls: 'lotus-group-count', text: bits.join(' · ') });
+      const rows = () => {
+        for (const it of [...b.items.filter((d) => !d.checked), ...b.items.filter((d) => d.checked)]) {
+          const w = workouts[now.getDay()];
+          const label = hasWorkouts && /^Workout/.test(it.text) ? (w === 'Rest' ? 'Rest day (PT optional)' : `Workout: ${w} + PT`) : it.text;
+          this.checkRow(dcard, it, { label, trail: hasHistory ? itemTrail(history, it.text, today) : null });
+        }
+      };
+      // Evening: what's booked first, then the routine that follows it.
+      if (b.part === 'evening') { this.eventList(dcard, b.events, null); rows(); }
+      else { rows(); this.eventList(dcard, b.events, null); }
+    }
+    if (hasHistory) dcard.createDiv({ cls: 'lotus-legend', text: 'Dots: last 7 days, oldest → newest' });
 
     // ---- today's frontlog
-    const tasks = this.card(colA, "Today's frontlog", 'list-todo', items.length ? `${tasksDone}/${items.length}` : '');
+    const tasks = this.card(colB, "Today's frontlog", 'list-todo', items.length ? `${tasksDone}/${items.length}` : '');
     if (items.length) this.bar(tasks, tasksDone, items.length);
     if (!items.length) tasks.createDiv({ cls: 'lotus-empty', text: 'No tasks assigned for today.' });
     for (const it of items) this.checkRow(tasks, it, { size: sizes[it.text] });
     const tnote = shared.planned[dayKey(today)]?.note;
     if (tnote) tasks.createDiv({ cls: 'lotus-note', text: tnote });
-
-    // ---- daily routine
-    const dcard = this.card(colB, 'Daily routine', 'repeat', `${dailyDone}/${daily.length}`);
-    const hasHistory = Object.keys(history || {}).length > 0;
-    if (dailyDone === daily.length && daily.length) dcard.createDiv({ cls: 'lotus-empty', text: 'All done today 🌸' });
-    // Grouped by "## Morning"-style sub-headings if the note has them; open items first in each group.
-    const part = currentPart(now, p.settings.eveningHour);
-    for (const g of dailyGroups(lines)) {
-      if (g.title) {
-        const done = g.items.filter((d) => d.checked).length;
-        const isNow = g.title.toLowerCase().startsWith(part);
-        const h = dcard.createDiv({ cls: 'lotus-group' + (isNow ? ' is-now' : '') });
-        h.createSpan({ text: g.title });
-        h.createSpan({ cls: 'lotus-group-count', text: isNow ? `now · ${done}/${g.items.length}` : `${done}/${g.items.length}` });
-      }
-      for (const it of [...g.items.filter((d) => !d.checked), ...g.items.filter((d) => d.checked)]) {
-        const w = workouts[now.getDay()];
-        const label = hasWorkouts && /^Workout/.test(it.text) ? (w === 'Rest' ? 'Rest day (PT optional)' : `Workout: ${w} + PT`) : it.text;
-        this.checkRow(dcard, it, { label, trail: hasHistory ? itemTrail(history, it.text, today) : null });
-      }
-    }
-    if (hasHistory) dcard.createDiv({ cls: 'lotus-legend', text: 'Dots: last 7 days, oldest → newest' });
 
     // ---- tomorrow look-ahead
     const tcard = this.card(colB, `Tomorrow · ${WEEKDAYS[tomorrow.getDay()].slice(0, 3)} ${dateLabel(tomorrow)}`, 'sunrise', '', 'is-ahead');
@@ -964,7 +987,8 @@ class Dashboard extends ItemView {
     const list = parent.createDiv({ cls: 'lotus-events' });
     const now = new Date();
     for (const e of events) {
-      const row = list.createDiv({ cls: 'lotus-event' + (!e.allDay && e.start <= now && e.end > now ? ' is-now' : '') });
+      const state = e.allDay ? '' : e.end <= now ? ' is-past' : e.start <= now ? ' is-now' : '';
+      const row = list.createDiv({ cls: 'lotus-event' + state });
       const time = row.createDiv({ cls: 'lotus-time' });
       time.createDiv({ text: e.allDay ? 'All day' : timeLabel(e.start) });
       if (!e.allDay) {
@@ -1046,7 +1070,7 @@ class LotusSettings extends PluginSettingTab {
 module.exports = LotusPlanner;
 module.exports.core = {
   dayKey, dateLabel, labelToDate, addDays, parseTree, serialize, resetDaily, rollover, nextQueue,
-  queueOutline, applyPicks, dayItems, dailyItems, dailyGroups, currentPart, ensureDateSection, buildPrompt, parseClaudeReply,
+  queueOutline, applyPicks, dayItems, dailyItems, dailyGroups, currentPart, dayTimeline, ensureDateSection, buildPrompt, parseClaudeReply,
   loadEvents, eventsOn, dailySnapshot, routineHealth, itemTrail, askClaude, readShared, writeShared,
   choosePicks, commitPicks, startOfDay, budgetFor, DEFAULTS,
 };
