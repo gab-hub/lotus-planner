@@ -23,6 +23,17 @@ guard granted else {
     exit(1)
 }
 
+// macOS only pulls from Google/iCloud on its own schedule (sometimes hours apart). Ask it to sync now and
+// wait up to 10s for the store to report changes; if nothing changed, the cached data is current anyway.
+var changed = false
+let observer = NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: store, queue: nil) { _ in changed = true }
+store.refreshSourcesIfNecessary()
+let deadline = Date().addingTimeInterval(10)
+while !changed && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.25)) }
+if changed { RunLoop.current.run(until: Date().addingTimeInterval(1)) }  // let the rest of the sync land
+NotificationCenter.default.removeObserver(observer)
+store.reset()
+
 let iso = ISO8601DateFormatter()
 let events = store.events(matching: store.predicateForEvents(withStart: start, end: end, calendars: nil))
     .sorted { $0.startDate < $1.startDate }
