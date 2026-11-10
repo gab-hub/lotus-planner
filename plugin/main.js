@@ -30,6 +30,9 @@ const DEFAULTS = {
   eveningHour: 17,
   // Weekdays: keep today's frontlog, the Evening routine and Tomorrow out of sight until eveningHour, so they don't pull you in early.
   holdEvening: false,
+  // Weekdays: keep the Daytime routine hidden behind a "Lunchtime" button until you open it (or the evening opens).
+  holdDaytime: false,
+  lunchOpened: null,
   planHour: 20,
   budgetWeekday: 'about 60 minutes after work: at most 1 medium task (~30 min) + quick ones. No big tasks. Max 5 items.',
   budgetBusyEvening: 'about 30 minutes: quick tasks only, max 3 items.',
@@ -387,6 +390,11 @@ function currentPart(date, eveningHour = 17) {
 /** True on a weekday before eveningHour when holdEvening is on: today's frontlog and Evening routine stay hidden. */
 function eveningHeld(date, s = DEFAULTS) {
   return !!s.holdEvening && !isWeekend(date) && date.getHours() < s.eveningHour;
+}
+
+/** True on a weekday before eveningHour when holdDaytime is on and the lunch button hasn't been pressed today. */
+function daytimeHeld(date, s = DEFAULTS) {
+  return !!s.holdDaytime && !isWeekend(date) && date.getHours() < s.eveningHour && s.lunchOpened !== dayKey(date);
 }
 
 // ---------------------------------------------------------------- routine sustainability
@@ -988,6 +996,7 @@ class Dashboard extends ItemView {
     const health = routineHealth(history);
     const held = eveningHeld(now, p.settings);
     const opensAt = hourLabel(p.settings.eveningHour);
+    const lunchHeld = daytimeHeld(now, p.settings);
 
     el.empty();
     el.addClass('lotus-dash');
@@ -1049,8 +1058,29 @@ class Dashboard extends ItemView {
         this.eventList(dcard, b.events, null);
         continue;
       }
+      // Held daytime: one button instead of the routine, until lunch.
+      if (lunchHeld && b.part === 'day') {
+        h.createSpan({ cls: 'lotus-group-count', text: 'after lunch starts' });
+        const btn = dcard.createEl('button', { cls: 'lotus-btn lotus-lunch', text: "It's lunchtime" });
+        btn.onclick = async () => {
+          p.settings.lunchOpened = dayKey(new Date());
+          await p.save();
+          p.refreshViews();
+        };
+        this.eventList(dcard, b.events, null);
+        continue;
+      }
       const bits = [isNow ? 'now' : '', b.items.length ? `${done}/${b.items.length}` : ''].filter(Boolean);
       h.createSpan({ cls: 'lotus-group-count', text: bits.join(' · ') });
+      // Opened at lunch by mistake (or just testing): put it back behind the button.
+      if (b.part === 'day' && p.settings.lunchOpened === dayKey(now) && daytimeHeld(now, { ...p.settings, lunchOpened: null })) {
+        const hide = h.createSpan({ cls: 'lotus-group-count lotus-rehide', text: ' · hide' });
+        hide.onclick = async () => {
+          p.settings.lunchOpened = null;
+          await p.save();
+          p.refreshViews();
+        };
+      }
       const rows = () => {
         for (const it of [...b.items.filter((d) => !d.checked), ...b.items.filter((d) => d.checked)]) {
           const w = workouts[now.getDay()];
@@ -1281,6 +1311,16 @@ class LotusSettings extends PluginSettingTab {
           this.plugin.refreshViews();
         })
       );
+    new Setting(containerEl)
+      .setName('Hold the daytime until lunch')
+      .setDesc('Weekdays: hide the Daytime routine behind an "It\'s lunchtime" button. It opens for the rest of the day when you press it, or at the evening hour.')
+      .addToggle((t) =>
+        t.setValue(!!s.holdDaytime).onChange(async (v) => {
+          s.holdDaytime = v;
+          await this.plugin.save();
+          this.plugin.refreshViews();
+        })
+      );
     num('Planning hour', '0-23. Only used for the "Gets planned at…" hint; the schedule itself is the launchd job.', 'planHour');
     new Setting(containerEl)
       .setName('Workouts (Sun→Sat)')
@@ -1300,7 +1340,7 @@ class LotusSettings extends PluginSettingTab {
 module.exports = LotusPlanner;
 module.exports.core = {
   dayKey, dateLabel, labelToDate, addDays, parseTree, serialize, resetDaily, rollover, nextQueue,
-  queueOutline, applyPicks, dayItems, dailyItems, dailyGroups, currentPart, eveningHeld, dayTimeline, ensureDateSection, buildPrompt, parseClaudeReply,
+  queueOutline, applyPicks, dayItems, dailyItems, dailyGroups, currentPart, eveningHeld, daytimeHeld, dayTimeline, ensureDateSection, buildPrompt, parseClaudeReply,
   loadEvents, eventsOn, dailySnapshot, routineHealth, itemTrail, askClaude, readShared, writeShared,
   choosePicks, commitPicks, startOfDay, budgetFor, uvWindow, worstUv, frontlogSummary, DEFAULTS,
 };

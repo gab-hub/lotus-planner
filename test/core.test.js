@@ -44,6 +44,14 @@ const c = require('../plugin/main.js').core;
   assert.equal(c.eveningHeld(new Date(2026, 10, 10, 17), hold), false, 'Tue 5pm open');
   assert.equal(c.eveningHeld(new Date(2026, 10, 7, 9), hold), false, 'Sat never held');
   assert.equal(c.eveningHeld(new Date(2026, 10, 10, 9), c.DEFAULTS), false, 'off by default');
+  // hold the daytime until the lunch button is pressed today
+  const lunch = { ...c.DEFAULTS, holdDaytime: true };
+  assert.equal(c.daytimeHeld(new Date(2026, 10, 10, 12), lunch), true, 'Tue noon held');
+  assert.equal(c.daytimeHeld(new Date(2026, 10, 10, 12), { ...lunch, lunchOpened: '2026-11-10' }), false, 'opened today');
+  assert.equal(c.daytimeHeld(new Date(2026, 10, 11, 12), { ...lunch, lunchOpened: '2026-11-10' }), true, 'yesterday\'s press doesn\'t count');
+  assert.equal(c.daytimeHeld(new Date(2026, 10, 10, 17), lunch), false, 'evening opens it');
+  assert.equal(c.daytimeHeld(new Date(2026, 10, 7, 12), lunch), false, 'weekends open');
+  assert.equal(c.daytimeHeld(new Date(2026, 10, 10, 12), c.DEFAULTS), false, 'off by default');
 }
 
 const doc = `# Daily
