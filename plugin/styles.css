@@ -136,3 +136,9 @@
 .lotus-group.is-now, .lotus-group.is-now .lotus-group-count { color: var(--lotus-accent); }
 .lotus-event.is-past { opacity: 0.45; }
 .lotus-card .lotus-events { margin: 2px 0 4px; }
+
+/* hand-sizing: click a pill to set or change a task's size */
+.lotus-size.is-clickable { cursor: pointer; }
+.lotus-size.is-clickable:hover { filter: brightness(1.15); }
+.lotus-size-none { background: transparent; color: var(--text-faint); border: 1px dashed var(--lotus-line); }
+.lotus-size-none:hover { color: var(--text-muted); }

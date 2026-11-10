@@ -28,10 +28,16 @@ const DEFAULTS = {
   // Planning prompt. Weekday tasks happen after eveningHour; a weekday with an event after then is a busy evening.
   context: 'The person works a day job, so weekday tasks happen in the evening.',
   eveningHour: 17,
+  // Weekdays: keep today's frontlog, the Evening routine and Tomorrow out of sight until eveningHour, so they don't pull you in early.
+  holdEvening: false,
   planHour: 20,
   budgetWeekday: 'about 60 minutes after work: at most 1 medium task (~30 min) + quick ones. No big tasks. Max 5 items.',
   budgetBusyEvening: 'about 30 minutes: quick tasks only, max 3 items.',
   budgetWeekend: 'about 3 hours total: at most 1 big task (1-2h) + 2 medium + any quick ones. Max 7 items.',
+  // UV chip: decimal coordinates, blank = hidden. Forecast from open-meteo.com (no key).
+  latitude: '',
+  longitude: '',
+  uvThreshold: 3,
   lastNewDay: null,
   lastNudge: null,
   planned: {},
@@ -378,6 +384,11 @@ function currentPart(date, eveningHour = 17) {
   return h < 12 ? 'morning' : h < eveningHour ? 'day' : 'evening';
 }
 
+/** True on a weekday before eveningHour when holdEvening is on: today's frontlog and Evening routine stay hidden. */
+function eveningHeld(date, s = DEFAULTS) {
+  return !!s.holdEvening && !isWeekend(date) && date.getHours() < s.eveningHour;
+}
+
 // ---------------------------------------------------------------- routine sustainability
 
 /** Snapshot of the Daily checklist for one day, taken right before the reset wipes it. */
@@ -393,6 +404,14 @@ function dailySnapshot(lines) {
  * Looks at the last 7 recorded days. Returns null when there's too little data or the routine is holding up,
  * otherwise { rate, days, flagged: [{text, missed, of}], message }.
  */
+/**
+ * Identity of a Daily item across days: its wording minus any "(...)" detail, so tuning a goal
+ * ("Steps (8.7k)" -> "Steps (8.8k)") keeps its history without rewriting past records.
+ */
+function itemKey(text) {
+  return String(text).replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+}
+
 function routineHealth(history, window = 7) {
   const keys = Object.keys(history || {}).sort().slice(-window);
   if (keys.length < 3) return null;
@@ -403,18 +422,22 @@ function routineHealth(history, window = 7) {
     const h = history[k];
     total += h.items.length;
     missed += h.missed.length;
+    const missedKeys = h.missed.map(itemKey);
     for (const t of h.items) {
-      const r = per.get(t) || { text: t, missed: 0, of: 0 };
+      const k = itemKey(t);
+      const r = per.get(k) || { text: t, missed: 0, of: 0 };
+      r.text = t; // newest wording wins for display
       r.of++;
-      if (h.missed.includes(t)) r.missed++;
-      per.set(t, r);
+      if (missedKeys.includes(k)) r.missed++;
+      per.set(k, r);
     }
   }
   const rate = total ? (total - missed) / total : 1;
   const flagged = [...per.values()]
     .filter((r) => r.of >= 3 && r.missed / r.of >= 0.6)
     .sort((a, b) => b.missed / b.of - a.missed / a.of);
-  if (rate >= 0.7 && !flagged.length) return null;
+  // Only nudge when there's something specific to shrink: a low average alone (e.g. one zero day) isn't actionable.
+  if (!flagged.length) return null;
   const short = (t) => t.split(/[:(]/)[0].trim();
   const parts = [`Your routine averaged ${Math.round(rate * 100)}% over the last ${keys.length} days.`];
   if (flagged.length) {
@@ -424,12 +447,43 @@ function routineHealth(history, window = 7) {
   return { rate, days: keys.length, flagged, message: parts.join(' ') };
 }
 
+const SIZE_MINUTES = { quick: 10, medium: 30, big: 90 };
+const SIZES = ['quick', 'medium', 'big', 'project'];
+const SIZE_HINTS = { quick: 'under 10 min', medium: '~30 min', big: '1-2 hours', project: 'multiple sessions' };
+
+function durationLabel(min) {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m} min`;
+}
+
+/** One live line about today's frontlog, computed from what's on the list now (never goes stale). */
+function frontlogSummary(items, sizes = {}) {
+  if (!items.length) return '';
+  const open = items.filter((i) => !i.checked);
+  if (!open.length) return `All ${items.length} done for today.`;
+  const counts = {};
+  let minutes = 0;
+  let unsized = 0;
+  for (const it of open) {
+    const s = sizes[it.text];
+    if (s) counts[s] = (counts[s] || 0) + 1;
+    if (SIZE_MINUTES[s]) minutes += SIZE_MINUTES[s];
+    else unsized++;
+  }
+  const mix = ['project', 'big', 'medium', 'quick'].filter((s) => counts[s]).map((s) => `${counts[s]} ${s}`);
+  const parts = [`${open.length} of ${items.length} left${mix.length ? ` (${mix.join(', ')})` : ''}`];
+  if (minutes) parts.push(`about ${durationLabel(minutes)}${unsized ? ' plus the unsized ones' : ''}`);
+  return parts.join(' · ') + '.';
+}
+
 /** Last `n` days for one Daily item: 'done' | 'missed' | null (no data). Oldest first. */
 function itemTrail(history, text, today, n = 7) {
   const out = [];
   for (let i = n; i >= 1; i--) {
     const h = (history || {})[dayKey(addDays(today, -i))];
-    out.push(!h || !h.items.includes(text) ? null : h.missed.includes(text) ? 'missed' : 'done');
+    const k = itemKey(text);
+    out.push(!h || !h.items.some((t) => itemKey(t) === k) ? null : h.missed.some((t) => itemKey(t) === k) ? 'missed' : 'done');
   }
   return out;
 }
@@ -440,6 +494,53 @@ function budgetFor(date, events, s = DEFAULTS) {
   if (isWeekend(date)) return `Weekend day, ${s.budgetWeekend}`;
   const busy = events.some((e) => !e.allDay && e.start.getHours() >= s.eveningHour);
   return busy ? `Weekday WITH evening plans, ${s.budgetBusyEvening}` : `Weekday, ${s.budgetWeekday}`;
+}
+
+// ---------------------------------------------------------------- UV
+
+/**
+ * When today's UV index is above `threshold`, from hourly values (times are local "YYYY-MM-DDTHH:MM").
+ * Crossings are linearly interpolated between hours. Returns { start, end, peak } or { start: null, peak }.
+ */
+function uvWindow(times, uv, threshold = 3) {
+  const pts = times.map((t, i) => ({ t: new Date(t).getTime(), v: Number(uv[i]) })).filter((p) => Number.isFinite(p.v));
+  const peak = pts.reduce((m, p) => Math.max(m, p.v), 0);
+  const cross = (a, b) => new Date(a.t + ((threshold - a.v) / (b.v - a.v)) * (b.t - a.t));
+  let start = null;
+  let end = null;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    const prev = pts[i - 1];
+    if (p.v > threshold) {
+      if (!start) start = prev ? cross(prev, p) : new Date(p.t);
+      const next = pts[i + 1];
+      end = next ? (next.v > threshold ? null : cross(p, next)) : new Date(p.t);
+    }
+  }
+  // Round to 5 minutes so the chip reads 10:35am, not 10:37am.
+  const r5 = (d) => d && new Date(Math.round(d.getTime() / 300000) * 300000);
+  return { start: r5(start), end: r5(end), peak };
+}
+
+/**
+ * Worst case per hour: the higher of the cloud-adjusted and clear-sky UV. The cloud-adjusted forecast
+ * often reads far lower than weather apps (clouds block less UV than the model assumes, and cloud
+ * forecasts miss), and for a sunscreen reminder, erring high is the safe side.
+ */
+function worstUv(cloudy, clear) {
+  return cloudy.map((v, i) => {
+    const a = Number(v);
+    const b = Number(clear?.[i]);
+    return Math.max(Number.isFinite(a) ? a : -Infinity, Number.isFinite(b) ? b : -Infinity);
+  }).map((v) => (Number.isFinite(v) ? v : null));
+}
+
+async function fetchUv(lat, lon) {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&hourly=uv_index,uv_index_clear_sky&timezone=auto&forecast_days=1`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`open-meteo ${res.status}`);
+  const j = await res.json();
+  return { time: j.hourly.time, uv_index: worstUv(j.hourly.uv_index, j.hourly.uv_index_clear_sky) };
 }
 
 function hourLabel(h) {
@@ -623,6 +724,21 @@ class LotusPlanner extends Plugin {
         if (f.path === this.settings.file) this.refreshViews();
       })
     );
+    // The calendar cache lives outside the vault, so Obsidian never reports changes to it: poll its mtime.
+    this.registerInterval(window.setInterval(() => this.checkCalendar(), 60 * 1000));
+    this.registerDomEvent(window, 'focus', () => this.checkCalendar());
+  }
+
+  /** Redraw the dashboard when lotus-cal has rewritten the calendar cache since the last check. */
+  checkCalendar() {
+    let m = null;
+    try {
+      m = fs.statSync(this.settings.cacheFile).mtimeMs;
+    } catch {
+      return;
+    }
+    if (this.calendarMtime !== undefined && m !== this.calendarMtime) this.refreshViews();
+    this.calendarMtime = m;
   }
 
   save() {
@@ -787,6 +903,40 @@ class LotusPlanner extends Plugin {
       await leaf.setViewState({ type: VIEW_TYPE, active: true });
     }
     workspace.revealLeaf(leaf);
+    this.refreshViews();
+  }
+
+  /** Set (or clear, with null) a task's size by hand. Stored with the planner's sizes in the vault so every device sees it. */
+  setSize(text, size) {
+    const shared = readShared(this.base());
+    if (size) shared.sizes[text] = size;
+    else delete shared.sizes[text];
+    if (!size) delete this.settings.sizes[text];
+    writeShared(this.base(), shared, new Date());
+    if (!size) this.save();
+    this.refreshViews();
+  }
+
+  /** Today's UV window from memory; kicks off a fetch (then re-renders) when missing or stale. */
+  uvToday() {
+    const { latitude: lat, longitude: lon, uvThreshold } = this.settings;
+    if (lat === '' || lon === '') return null;
+    const key = `${dayKey(new Date())}|${lat},${lon}|${uvThreshold}`;
+    if (this.uv?.key === key) return this.uv.value;
+    if (this.uvFetching !== key && !(this.uvFailedAt > Date.now() - 30 * 60 * 1000)) {
+      this.uvFetching = key;
+      fetchUv(lat, lon)
+        .then((h) => {
+          this.uv = { key, value: uvWindow(h.time, h.uv_index, Number(uvThreshold)) };
+          this.refreshViews();
+        })
+        .catch((e) => {
+          this.uvFailedAt = Date.now();
+          console.warn('Lotus: UV forecast failed', e);
+        })
+        .finally(() => (this.uvFetching = null));
+    }
+    return this.uv?.key?.startsWith(dayKey(new Date())) ? this.uv.value : null;
   }
 
   refreshViews() {
@@ -836,6 +986,8 @@ class Dashboard extends ItemView {
     const dailyDone = daily.filter((d) => d.checked).length;
     const tasksDone = items.filter((i) => i.checked).length;
     const health = routineHealth(history);
+    const held = eveningHeld(now, p.settings);
+    const opensAt = hourLabel(p.settings.eveningHour);
 
     el.empty();
     el.addClass('lotus-dash');
@@ -853,7 +1005,13 @@ class Dashboard extends ItemView {
       c.createSpan({ text });
     };
     chip('calendar', `${leftToday.length} ${leftToday.length === 1 ? 'event' : 'events'} left`);
-    chip('list-todo', items.length ? `${items.length - tasksDone} ${items.length - tasksDone === 1 ? 'task' : 'tasks'} open` : 'no tasks');
+    if (held) chip('list-todo', `tasks at ${opensAt}`);
+    else chip('list-todo', items.length ? `${items.length - tasksDone} ${items.length - tasksDone === 1 ? 'task' : 'tasks'} open` : 'no tasks');
+    const uv = p.uvToday();
+    if (uv) {
+      const t = p.settings.uvThreshold;
+      chip('sun', uv.start ? `UV ${t}+ ${timeLabel(uv.start)}–${timeLabel(uv.end)}` : `UV under ${t} today`);
+    }
     if (hasWorkouts) chip('dumbbell', workouts[now.getDay()] === 'Rest' ? 'Rest day' : `${workouts[now.getDay()]} day`);
     const rings = head.createDiv({ cls: 'lotus-rings' });
     this.ring(rings, tasksDone, items.length, 'frontlog');
@@ -885,6 +1043,12 @@ class Dashboard extends ItemView {
       const done = b.items.filter((d) => d.checked).length;
       const h = dcard.createDiv({ cls: 'lotus-group' + (isNow ? ' is-now' : '') });
       h.createSpan({ text: b.title });
+      // Held evening: still show what's booked, but not the routine, until it opens.
+      if (held && b.part === 'evening') {
+        h.createSpan({ cls: 'lotus-group-count', text: `opens at ${opensAt}` });
+        this.eventList(dcard, b.events, null);
+        continue;
+      }
       const bits = [isNow ? 'now' : '', b.items.length ? `${done}/${b.items.length}` : ''].filter(Boolean);
       h.createSpan({ cls: 'lotus-group-count', text: bits.join(' · ') });
       const rows = () => {
@@ -901,15 +1065,32 @@ class Dashboard extends ItemView {
     if (hasHistory) dcard.createDiv({ cls: 'lotus-legend', text: 'Dots: last 7 days, oldest → newest' });
 
     // ---- today's frontlog
-    const tasks = this.card(colB, "Today's frontlog", 'list-todo', items.length ? `${tasksDone}/${items.length}` : '');
-    if (items.length) this.bar(tasks, tasksDone, items.length);
-    if (!items.length) tasks.createDiv({ cls: 'lotus-empty', text: 'No tasks assigned for today.' });
-    for (const it of items) this.checkRow(tasks, it, { size: sizes[it.text] });
-    const tnote = shared.planned[dayKey(today)]?.note;
-    if (tnote) tasks.createDiv({ cls: 'lotus-note', text: tnote });
+    const tasks = this.card(colB, "Today's frontlog", 'list-todo', held || !items.length ? '' : `${tasksDone}/${items.length}`);
+    if (held) {
+      tasks.createDiv({ cls: 'lotus-empty', text: `Opens at ${opensAt}. Nothing here needs you yet.` });
+    } else {
+      if (items.length) this.bar(tasks, tasksDone, items.length);
+      if (!items.length) tasks.createDiv({ cls: 'lotus-empty', text: 'No tasks assigned for today.' });
+      for (const it of items) this.checkRow(tasks, it, { size: sizes[it.text], sizable: true });
+      // Live summary instead of the planner's saved note, which goes stale as soon as tasks move.
+      const tnote = frontlogSummary(items, sizes);
+      if (tnote) tasks.createDiv({ cls: 'lotus-note', text: tnote });
+    }
 
     // ---- tomorrow look-ahead
     const tcard = this.card(colB, `Tomorrow · ${WEEKDAYS[tomorrow.getDay()].slice(0, 3)} ${dateLabel(tomorrow)}`, 'sunrise', '', 'is-ahead');
+    if (held) tcard.createDiv({ cls: 'lotus-empty', text: `Opens at ${opensAt}. Today first.` });
+    else this.renderTomorrow(tcard, { events, tomorrow, lines, sizes, hasWorkouts, workouts, evening, now, shared });
+
+    // ---- footer
+    const foot = el.createDiv({ cls: 'lotus-foot' });
+    const link = foot.createEl('a', { text: `Open ${path.basename(p.settings.file)}` });
+    link.onclick = () => this.app.workspace.openLinkText(p.settings.file, '', false);
+    foot.createSpan({ text: updated ? `Calendar synced ${timeLabel(updated)}` : 'Calendar not synced yet' });
+  }
+
+  renderTomorrow(tcard, { events, tomorrow, lines, sizes, hasWorkouts, workouts, evening, now, shared }) {
+    const p = this.plugin;
     const tev = eventsOn(events, tomorrow);
     const timed = tev.filter((e) => !e.allDay);
     const stats = tcard.createDiv({ cls: 'lotus-stats' });
@@ -926,7 +1107,7 @@ class Dashboard extends ItemView {
     this.eventList(tcard, tev, null);
     tcard.createDiv({ cls: 'lotus-label', text: 'Tasks' });
     if (titems.length) {
-      for (const it of titems) this.checkRow(tcard, it, { size: sizes[it.text] });
+      for (const it of titems) this.checkRow(tcard, it, { size: sizes[it.text], sizable: true });
     } else {
       tcard.createDiv({ cls: 'lotus-empty', text: evening || isWeekend(now) ? 'Not planned yet.' : `Gets planned at ${hourLabel(p.settings.planHour)}.` });
     }
@@ -939,12 +1120,6 @@ class Dashboard extends ItemView {
     };
     const tn = shared.planned[dayKey(tomorrow)]?.note;
     if (tn) tcard.createDiv({ cls: 'lotus-note', text: tn });
-
-    // ---- footer
-    const foot = el.createDiv({ cls: 'lotus-foot' });
-    const link = foot.createEl('a', { text: `Open ${path.basename(p.settings.file)}` });
-    link.onclick = () => this.app.workspace.openLinkText(p.settings.file, '', false);
-    foot.createSpan({ text: updated ? `Calendar synced ${timeLabel(updated)}` : 'Calendar not synced yet' });
   }
 
   card(parent, title, icon, badge, extraCls) {
@@ -1006,13 +1181,30 @@ class Dashboard extends ItemView {
     }
   }
 
-  checkRow(parent, item, { size, label, trail } = {}) {
+  checkRow(parent, item, { size, label, trail, sizable } = {}) {
     const row = parent.createEl('label', { cls: 'lotus-row' + (item.checked ? ' is-done' : '') });
     const cb = row.createEl('input', { type: 'checkbox', cls: 'lotus-check' });
     cb.checked = item.checked;
     cb.onchange = () => this.plugin.toggle(item.line, item.text);
     row.createSpan({ cls: 'lotus-row-text', text: label || item.text });
-    if (size) row.createSpan({ cls: `lotus-size lotus-size-${size}`, text: size });
+    if (sizable) {
+      const pill = row.createSpan({
+        cls: `lotus-size is-clickable ${size ? `lotus-size-${size}` : 'lotus-size-none'}`,
+        text: size || 'size?',
+        attr: { 'aria-label': 'Set size', role: 'button' },
+      });
+      pill.onclick = (e) => {
+        // The row is a <label>: don't let the click toggle the checkbox.
+        e.preventDefault();
+        e.stopPropagation();
+        const menu = new obsidian.Menu();
+        for (const s of SIZES) {
+          menu.addItem((i) => i.setTitle(`${s} · ${SIZE_HINTS[s]}`).setChecked(s === size).onClick(() => this.plugin.setSize(item.text, s)));
+        }
+        if (size) menu.addItem((i) => i.setTitle('Clear size').onClick(() => this.plugin.setSize(item.text, null)));
+        menu.showAtMouseEvent(e);
+      };
+    } else if (size) row.createSpan({ cls: `lotus-size lotus-size-${size}`, text: size });
     if (trail) {
       const t = row.createSpan({ cls: 'lotus-trail' });
       for (const s of trail) t.createSpan({ cls: `lotus-dot${s ? ` is-${s}` : ''}` });
@@ -1057,7 +1249,38 @@ class LotusSettings extends PluginSettingTab {
           }
         })
       );
+    const coord = (name, key) =>
+      new Setting(containerEl).setName(name).setDesc('Decimal degrees for the UV chip. Leave blank to hide it.').addText((t) =>
+        t.setValue(String(s[key])).onChange(async (v) => {
+          v = v.trim();
+          if (v === '' || Number.isFinite(Number(v))) {
+            s[key] = v;
+            await this.plugin.save();
+          }
+        })
+      );
+    coord('Latitude', 'latitude');
+    coord('Longitude', 'longitude');
+    new Setting(containerEl).setName('UV threshold').setDesc('The chip shows when the UV index is above this.').addText((t) =>
+      t.setValue(String(s.uvThreshold)).onChange(async (v) => {
+        const n = Number(v);
+        if (Number.isFinite(n) && n >= 0) {
+          s.uvThreshold = n;
+          await this.plugin.save();
+        }
+      })
+    );
     num('Evening starts (hour)', '0-23. Weekday tasks happen after this; also when the dashboard says "Tonight".', 'eveningHour');
+    new Setting(containerEl)
+      .setName('Hold the evening')
+      .setDesc('Weekdays: hide today\'s frontlog, the Evening routine and Tomorrow until the evening hour, so they don\'t pull you in early.')
+      .addToggle((t) =>
+        t.setValue(!!s.holdEvening).onChange(async (v) => {
+          s.holdEvening = v;
+          await this.plugin.save();
+          this.plugin.refreshViews();
+        })
+      );
     num('Planning hour', '0-23. Only used for the "Gets planned at…" hint; the schedule itself is the launchd job.', 'planHour');
     new Setting(containerEl)
       .setName('Workouts (Sun→Sat)')
@@ -1077,7 +1300,7 @@ class LotusSettings extends PluginSettingTab {
 module.exports = LotusPlanner;
 module.exports.core = {
   dayKey, dateLabel, labelToDate, addDays, parseTree, serialize, resetDaily, rollover, nextQueue,
-  queueOutline, applyPicks, dayItems, dailyItems, dailyGroups, currentPart, dayTimeline, ensureDateSection, buildPrompt, parseClaudeReply,
+  queueOutline, applyPicks, dayItems, dailyItems, dailyGroups, currentPart, eveningHeld, dayTimeline, ensureDateSection, buildPrompt, parseClaudeReply,
   loadEvents, eventsOn, dailySnapshot, routineHealth, itemTrail, askClaude, readShared, writeShared,
-  choosePicks, commitPicks, startOfDay, budgetFor, DEFAULTS,
+  choosePicks, commitPicks, startOfDay, budgetFor, uvWindow, worstUv, frontlogSummary, DEFAULTS,
 };

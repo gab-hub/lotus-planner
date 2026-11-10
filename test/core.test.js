@@ -38,6 +38,12 @@ const c = require('../plugin/main.js').core;
     ['evening', ['Workout', 'Shutdown'], ['Lex', 'Luke']],
   ]);
   assert.equal(c.currentPart(new Date(2026, 10, 6, 18)), 'evening');
+  // hold the evening: weekdays before eveningHour only, and only when switched on
+  const hold = { ...c.DEFAULTS, holdEvening: true };
+  assert.equal(c.eveningHeld(new Date(2026, 10, 10, 9), hold), true, 'Tue 9am held');
+  assert.equal(c.eveningHeld(new Date(2026, 10, 10, 17), hold), false, 'Tue 5pm open');
+  assert.equal(c.eveningHeld(new Date(2026, 10, 7, 9), hold), false, 'Sat never held');
+  assert.equal(c.eveningHeld(new Date(2026, 10, 10, 9), c.DEFAULTS), false, 'off by default');
 }
 
 const doc = `# Daily
@@ -110,15 +116,46 @@ assert.equal(c.routineHealth({ a: day([]), b: day(['Blog']), c: day([]) }), null
 const h = c.routineHealth({ a: day(['Read', 'Blog']), b: day(['Read']), c: day(['Read', 'Blog']), d: day([]) });
 assert.ok(h && h.flagged.length === 1 && h.flagged[0].text === 'Read' && h.rate < 0.7);
 assert.match(h.message, /Read \(3\/4\)/);
+// one zero day drags the average under 70%, but nothing is skipped repeatedly -> no nudge
+const all = ['Morning', 'Steps', 'Read', 'Blog'];
+assert.equal(c.routineHealth({ a: day(all), b: day(['Blog']), c: day(['Read']), d: day([]) }), null, 'low average without a flagged item: no nudge');
+
+// live frontlog summary
+const fi = [{ text: 'A', checked: false }, { text: 'B', checked: true }, { text: 'C', checked: false }, { text: 'D', checked: false }];
+assert.equal(c.frontlogSummary(fi, { A: 'big', B: 'quick', C: 'quick' }), '3 of 4 left (1 big, 1 quick) · about 1h 40m plus the unsized ones.');
+assert.equal(c.frontlogSummary(fi.map((i) => ({ ...i, checked: true }))), 'All 4 done for today.');
+assert.equal(c.frontlogSummary([]), '');
 const snap = c.dailySnapshot(doc);
 assert.deepEqual(snap.missed, ['Steps']);
 const trail = c.itemTrail({ '2026-11-04': { items: ['Steps'], missed: ['Steps'] }, '2026-11-03': { items: ['Steps'], missed: [] } }, 'Steps', today, 3);
 assert.deepEqual(trail, [null, 'done', 'missed']);
+// changing a goal in parentheses keeps the item's history
+const goalTrail = c.itemTrail({ '2026-11-04': { items: ['Steps (8.7k)'], missed: ['Steps (8.7k)'] }, '2026-11-03': { items: ['Steps (8.7k)'], missed: [] } }, 'Steps (8.8k)', today, 3);
+assert.deepEqual(goalTrail, [null, 'done', 'missed']);
+const gh = c.routineHealth({ a: { items: ['Steps (8.7k)'], missed: ['Steps (8.7k)'] }, b: { items: ['Steps (8.7k)'], missed: ['Steps (8.7k)'] }, c: { items: ['Steps (8.8k)'], missed: ['Steps (8.8k)'] } });
+assert.ok(gh && gh.flagged.length === 1 && gh.flagged[0].of === 3 && gh.flagged[0].text === 'Steps (8.8k)');
 
 // a plan with no picks doesn't leave an empty date heading
 const before = [...doc];
 c.applyPicks(before, new Date(2026, 10, 9), []);
 assert.ok(!before.includes('## Nov 9'));
+
+// UV window: interpolated crossings, rounded to 5 min
+{
+  const times = [8, 9, 10, 11, 12, 13, 14, 15, 16].map((h) => `2026-11-06T${String(h).padStart(2, '0')}:00`);
+  const w = c.uvWindow(times, [1, 2, 4, 5, 6, 5, 3.5, 2, 1], 3);
+  assert.strictEqual(w.start.getHours() * 60 + w.start.getMinutes(), 9 * 60 + 30);
+  assert.strictEqual(w.end.getHours() * 60 + w.end.getMinutes(), 14 * 60 + 20);
+  assert.strictEqual(w.peak, 6);
+  assert.strictEqual(c.uvWindow(times, [0, 1, 2, 2.5, 2, 1, 0, 0, 0], 3).start, null);
+  // Austin, Nov 9 2026: cloud-adjusted peaks at 2.25 ("low all day") but clear sky reaches 4.95 -> use the worst case
+  const cloudy = [0.35, 1.25, 0.75, 1.5, 2.25, 1.95, 2.0, 0.5, 0.25];
+  const clear = [0.35, 1.45, 2.8, 4.0, 4.75, 4.95, 4.45, 3.35, 2.05];
+  assert.strictEqual(c.uvWindow(times, cloudy, 3).start, null);
+  const worst = c.uvWindow(times, c.worstUv(cloudy, clear), 3);
+  assert.ok(worst.start && worst.peak === 4.95);
+  assert.deepEqual(c.worstUv([1, null], [null, 2]), [1, 2]);
+}
 
 // 8pm on the mini: roll today into tomorrow, then plan tomorrow
 (async () => {
